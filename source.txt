@@ -1,0 +1,218 @@
+
+    Public subFolderNameArr() As String                                    'サブフォルダ名の配列
+    Public subFolderPathArr() As String                                    'サブフォルダパスの配列
+    Public WB                 As Workbook                                  '証跡画像Excelのbookオブジェクト
+    Public syosekiFileName As String                                       '証跡画像Excelのbook名
+
+'' サブフォルダ取得処理
+Function getSubFolder() As Boolean
+
+    ' ファイルオブジェクト取得とインスタンス化
+    Dim fso As FileSystemObject: Set fso = New FileSystemObject
+    
+    ' フォルダ選択ダイアログ表示
+    With Application.FileDialog(msoFileDialogFolderPicker)
+        .Title = "証跡画像が格納されている親フォルダを指定してください"
+        .AllowMultiSelect = True
+        If .Show = -1 Then
+            tempFolder = .SelectedItems(1)
+        Else
+            getSubFolder = False
+            Exit Function
+        End If
+    End With
+    
+    ' 指定されたフォルダを取得
+    Dim selectFolder As Folder: Set selectFolder = fso.GetFolder(tempFolder)
+    
+    ' サブフォルダ配列を取得する
+    Dim fl As Folder
+    Dim cnt As Integer: cnt = 0
+    For Each fl In selectFolder.SubFolders
+        ReDim Preserve subFolderNameArr(cnt + 1)
+        ReDim Preserve subFolderPathArr(cnt + 1)
+        subFolderNameArr(cnt) = fl.Name
+        subFolderPathArr(cnt) = fl.Path
+        cnt = cnt + 1
+    Next
+    
+    '' 後処理
+    Set fso = Nothing
+    
+    getSubFolder = True
+End Function
+
+'' 証跡book作成処理
+Function createBook() As Boolean
+    
+    Dim FName As Variant
+    
+    ' 証跡一覧book作成ダイアログ
+    FName = Application.GetSaveAsFilename _
+    (InitialFileName:="試験証跡_項番", _
+    fileFilter:="Excelﾌｧｲﾙ(*.xlsx),*.txt", _
+    Title:="作成する試験証跡Excelの保存先とファイル名を指定してください。")
+    
+    ' 作成先が選択されたら保存
+    If FName <> False Then
+        Application.SheetsInNewWorkbook = UBound(subFolderNameArr)
+        Set WB = Workbooks.Add
+        WB.SaveAs Filename:=FName
+        syosekiFileName = WB.FullName
+        WB.Close
+    Else
+        createBook = False
+        Exit Function
+    End If
+    
+    createBook = True
+End Function
+
+'' 証跡貼り付け
+Sub paste()
+    Dim wWidth As Long
+    Dim wHeight As Long
+    Dim objFile As Object
+    Dim wPic As Object
+    Dim fso As FileSystemObject
+    Set fso = New FileSystemObject ' インスタンス化
+    Dim objFldr As FileSystemObject
+    Set objFldr = CreateObject("Scripting.FileSystemObject")
+    Dim lngTop As Long
+    
+    '' Excelを開く
+    Workbooks.Open syosekiFileName
+    Set WB = Workbooks(fso.GetFileName(syosekiFileName))
+    
+    ''　サブフォルダ配列の分繰り返す
+    For i = 0 To UBound(subFolderPathArr) - 1
+        '' シート取得
+        Dim ws As Worksheet
+        Set ws = WB.Sheets(i + 1)
+        
+        '' シート名をサブフォルダ名に変更
+        If Len(fso.GetFileName(subFolderPathArr(i))) > 31 Then
+            ws.Name = Left(fso.GetFileName(subFolderPathArr(i)), 31)
+        Else
+            ws.Name = fso.GetFileName(subFolderPathArr(i))
+        End If
+        
+        '' 開始高さ初期化
+        lngTop = 20
+        
+        '' サブフォルダ内の画像ファイル分繰り返す
+        For Each objFile In objFldr.GetFolder(subFolderPathArr(i)).Files
+            
+            '' ping以外の場合
+            If Right(objFile, 3) = "jpg" Or _
+                Right(objFile, 3) = "gif" Or _
+                Right(objFile, 3) = "bmp" Then
+                
+                ''選択した画像ファイルをオブジェクト型変数に格納する
+                Set wPic = LoadPicture(objFile)
+                
+                '' 幅・高さ取得
+                wWidth = wPic.Width * 0.0378
+                wHeight = wPic.Height * 0.0378
+                
+            '' pingの場合
+            ElseIf Right(objFile, 3) = "png" Then
+                
+                '' 幅・高さ取得
+                wWidth = GetPngWidthHeight(objFile, "getWidth")
+                wHeight = GetPngWidthHeight(objFile, "getHeight")
+            End If
+            
+            If Right(objFile, 3) = "jpg" Or _
+                Right(objFile, 3) = "gif" Or _
+                Right(objFile, 3) = "bmp" Or _
+                Right(objFile, 3) = "png" Then
+                
+                '' 画像を張り付ける
+                ws.Shapes.AddPicture _
+                        Filename:=objFile, _
+                        LinkToFile:=False, _
+                        SaveWithDocument:=True, _
+                        Left:=20, _
+                        Top:=lngTop, _
+                        Width:=wWidth, _
+                        Height:=wHeight
+                
+                lngTop = lngTop + wHeight + 40
+            End If
+            
+        
+        Next
+    Next
+End Sub
+
+'' ping画像サイズ取得
+Function GetPngWidthHeight(a_sPngPath As Object, mode As String) As Long
+    Dim iFileNo     As Integer  '// ファイル番号
+    Dim byData()    As Byte     '// バイナリデータ
+    Dim a_lWidth    As Long
+    Dim a_lHeight   As Long
+    
+    '// バイナリデータサイズを24バイト分確保
+    ReDim byData(23)
+    
+    '// ファイル番号取得
+    iFileNo = FreeFile
+    
+    '// PNGファイルをバイナリ形式で開く
+    Open a_sPngPath For Binary As #iFileNo
+    
+    '// 先頭から24バイト取得
+    Get #iFileNo, , byData
+    
+    '// クローズ
+    Close #iFileNo
+    
+    '// 先頭から16バイトがPNGフォーマットの場合
+    If (byData(0) = 137) And (byData(1) = 80) And (byData(2) = 78) And (byData(3) = 71) And _
+       (byData(4) = 13) And (byData(5) = 10) And (byData(6) = 26) And (byData(7) = 10) And _
+       (byData(8) = 0) And (byData(9) = 0) And (byData(10) = 0) And (byData(11) = 13) And _
+       (byData(12) = 73) And (byData(13) = 72) And (byData(14) = 68) And (byData(15) = 82) Then
+        '// 幅
+        a_lWidth = byData(16) * 16777216 + byData(17) * 65536 + byData(18) * 256 + byData(19)
+        
+        '// 高さ
+        a_lHeight = byData(20) * 16777216 + byData(21) * 65536 + byData(22) * 256 + byData(23)
+    End If
+    
+    '' 戻り値設定
+    If mode = "getWidth" Then
+        GetPngWidthHeight = a_lWidth
+    ElseIf mode = "getHeight" Then
+        GetPngWidthHeight = a_lHeight
+    End If
+End Function
+
+Sub imgPaste()
+    
+    Dim Temp As Integer: Temp = Application.SheetsInNewWorkbook         ' 現在のシート作成指定値を格納
+    
+    '' サブフォルダ取得処理
+    If getSubFolder() = False Then
+        Exit Sub
+    End If
+    
+    
+    '' 証跡book作成処理
+    If createBook() = False Then
+        Exit Sub
+    End If
+    
+    ' 証跡貼り付け
+    Call paste
+    
+    '' 作成Excelの保存と閉じる
+    With WB
+        .Save
+        .Close
+    End With
+    
+    '' シート作成指定数を初期化
+    Application.SheetsInNewWorkbook = Temp
+    
+End Sub
